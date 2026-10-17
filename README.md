@@ -70,6 +70,18 @@ cargo test                                         # unit tests (e2e tests skip 
 PYRS_E2E_PYTHON=/path/to/python-with-pip cargo test   # also build and run tests/fixtures/hello_app
 ```
 
+### Release builds
+
+For a Linux binary that runs on any x86-64 distro, whatever its glibc version, build against musl. It's fully static, and pyrs makes no network calls, so there's no OpenSSL to link:
+
+```sh
+rustup target add x86_64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+# → target/x86_64-unknown-linux-musl/release/pyrs
+```
+
+A plain `cargo build --release` links against the build machine's glibc and won't start on older distros.
+
 The e2e build step needs network access to fetch setuptools. The run steps are offline and use the `python3` on `PATH`, so ideally use a bare one.
 
 ## License
