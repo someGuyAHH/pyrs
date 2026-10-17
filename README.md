@@ -10,7 +10,7 @@ It doesn't bundle a Python runtime the way PyInstaller does. The file holds your
 |---|---|---|
 | What's in the file | Interpreter + stdlib + your code + deps, frozen | Your wheel + dependency wheels |
 | Hello-world size | several MB (it carries the interpreter) | ~4 KB |
-| Startup | Unpacks the whole archive to a temp dir on *every* run | ~50 ms; ~30 ms with `--cache` (measured on Linux) |
+| Startup | Unpacks the whole archive to a temp dir on *every* run | ~30 ms from the second run on; ~50 ms the first time (measured on Linux) |
 | Needs on the target | Nothing | Any Python 3 |
 | One file per OS? | Always (it freezes the interpreter) | Only if you use compiled packages; pure Python runs anywhere |
 | Your code inside | Frozen bytecode | Ordinary installed packages, so tracebacks and `importlib.metadata` work normally |
@@ -27,8 +27,9 @@ pyrs build . -o myapp.pyrs --entry mycli
 Run (on any machine with Python):
 
 ```sh
-pyrs run myapp.pyrs -- --some --args       # fresh venv in a temp dir, removed afterwards
-pyrs run --cache myapp.pyrs                # keep that venv and reuse it next time (much faster)
+pyrs run myapp.pyrs -- --some --args       # venv built once, cached, reused on later runs
+pyrs run --no-cache myapp.pyrs             # throwaway venv, deleted after the run
+pyrs clean                                 # delete all cached environments
 pyrs run --env global myapp.pyrs           # use the interpreter's own environment
 pyrs run --venv ~/envs/mine myapp.pyrs     # use (and install into) an existing venv
 pyrs inspect myapp.pyrs                    # what's inside, what it was built for
@@ -51,7 +52,9 @@ Pick the interpreter with `--python PATH_OR_NAME` or `PYRS_PYTHON`. Otherwise py
 
 ### Startup tips
 
-A fresh temp environment has no compiled `.pyc` files, so Python compiles every module it imports, on every run. That's barely noticeable for small apps. It adds up for big dependencies: an app using `rich` takes ~220 ms in temp mode against ~100 ms with `--cache`. If startup matters, use `--cache`.
+By default pyrs keeps the environment it built in the user cache (`~/.cache/pyrs` on Linux), keyed by the bundle's content, and reuses it on later runs. Rebuilding the bundle gives it a new key. `pyrs clean` deletes the cache.
+
+`--no-cache` builds a throwaway environment instead. That's slower mainly because a fresh environment has no compiled `.pyc` files, so Python compiles every module it imports, every time. An app using `rich` takes ~220 ms with `--no-cache` against ~100 ms cached.
 
 ## Limits
 

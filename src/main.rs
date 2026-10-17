@@ -19,6 +19,7 @@ fn main() {
         Command::Build(args) => commands::build::run(args, cli.quiet).map(|()| 0),
         Command::Run(args) => commands::run::run(args, cli.quiet),
         Command::Inspect(args) => commands::inspect::run(args).map(|()| 0),
+        Command::Clean => commands::clean::run(cli.quiet).map(|()| 0),
     };
     // Exit only after `run` has returned, so the temporary workspace has been cleaned up.
     match result {

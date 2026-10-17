@@ -26,6 +26,8 @@ pub enum Command {
     Run(RunArgs),
     /// Show what a bundle contains
     Inspect(InspectArgs),
+    /// Delete cached environments and interpreter probes
+    Clean,
 }
 
 #[derive(Args)]
@@ -74,9 +76,9 @@ pub struct RunArgs {
     #[arg(long, value_name = "PATH_OR_NAME", conflicts_with = "venv")]
     pub python: Option<String>,
 
-    /// Keep the prepared environment in the cache and reuse it on later runs (temp/global)
+    /// Build a throwaway environment and delete it afterwards, instead of reusing a cached one
     #[arg(long)]
-    pub cache: bool,
+    pub no_cache: bool,
 
     /// With --venv: run even if the project isn't installed there, instead of installing it
     #[arg(long)]

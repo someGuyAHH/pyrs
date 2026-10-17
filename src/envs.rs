@@ -31,8 +31,8 @@ impl EnvMode {
 
 /// A directory holding whatever environment was built for a run.
 ///
-/// Normally it is a temp dir that disappears on drop. With `--cache` it lives in the user
-/// cache, keyed by bundle content, and `ready` says whether an earlier run finished building it.
+/// By default it lives in the user cache, keyed by bundle content, and `ready` says whether an
+/// earlier run finished building it. With `--no-cache` it is a temp dir that disappears on drop.
 pub struct Workspace {
     pub root: PathBuf,
     pub ready: bool,
@@ -42,11 +42,9 @@ pub struct Workspace {
 impl Workspace {
     pub fn create(mode: &EnvMode, cache: bool, digest: &str, python: &Interpreter) -> Result<Self> {
         if let (true, Some(label)) = (cache, mode.cache_label()) {
-            let dirs = ProjectDirs::from("", "", "pyrs")
-                .ok_or_else(|| anyhow!("cannot work out a cache directory for this user"))?;
             let [major, minor, _] = python.info.version;
             let key = format!("{}-{label}-py{major}.{minor}", &digest[..16]);
-            let root = dirs.cache_dir().join("envs").join(key);
+            let root = cache_dir()?.join("envs").join(key);
             let ready = root.join(READY_MARKER).is_file();
             if !ready && root.exists() {
                 // A previous run died half way through; start over.
@@ -65,6 +63,12 @@ impl Workspace {
 }
 
 const READY_MARKER: &str = ".pyrs-ready";
+
+pub fn cache_dir() -> Result<PathBuf> {
+    ProjectDirs::from("", "", "pyrs")
+        .map(|dirs| dirs.cache_dir().to_path_buf())
+        .ok_or_else(|| anyhow!("cannot work out a cache directory for this user"))
+}
 
 /// Creates a virtual environment without pip, which pyrs doesn't need.
 ///

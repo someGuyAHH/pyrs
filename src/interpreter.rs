@@ -103,8 +103,7 @@ fn probe_cache_file(program: &Path, pre_args: &[OsString]) -> Option<PathBuf> {
         meta.len(),
         sha256_hex(PROBE_SCRIPT.as_bytes()),
     );
-    let dirs = directories::ProjectDirs::from("", "", "pyrs")?;
-    Some(dirs.cache_dir().join("probes").join(format!("{}.json", &sha256_hex(key.as_bytes())[..32])))
+    Some(crate::envs::cache_dir().ok()?.join("probes").join(format!("{}.json", &sha256_hex(key.as_bytes())[..32])))
 }
 
 /// Runs the probe script in isolated mode (`-I`) so nothing from the caller's cwd or env leaks in.

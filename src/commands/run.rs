@@ -31,7 +31,7 @@ pub fn run(args: RunArgs, quiet: bool) -> Result<i32> {
     };
     check_compatible(&manifest, &host.info)?;
 
-    let ws = Workspace::create(&mode, args.cache, &bundle.digest, &host)?;
+    let ws = Workspace::create(&mode, !args.no_cache, &bundle.digest, &host)?;
     let label = format!("{} {}", manifest.name, manifest.version);
 
     let (python, env_vars) = match &mode {
@@ -169,7 +169,7 @@ mod tests {
             env,
             venv: venv.map(PathBuf::from),
             python: None,
-            cache: false,
+            no_cache: false,
             no_install: false,
             args: Vec::<OsString>::new(),
         }

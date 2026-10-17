@@ -67,8 +67,19 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
+/// A cache directory shared by the tests, so they never touch the user's real cache.
+fn cache_home() -> &'static Path {
+    static CACHE: OnceLock<tempfile::TempDir> = OnceLock::new();
+    CACHE.get_or_init(|| tempfile::tempdir().unwrap()).path()
+}
+
 fn pyrs(args: &[&str]) -> Output {
-    Command::new(PYRS).args(args).env_remove("PYRS_PYTHON").output().unwrap()
+    Command::new(PYRS)
+        .args(args)
+        .env_remove("PYRS_PYTHON")
+        .env("XDG_CACHE_HOME", cache_home())
+        .output()
+        .unwrap()
 }
 
 fn stdout(output: &Output) -> String {
@@ -86,10 +97,10 @@ macro_rules! require_e2e {
 }
 
 #[test]
-fn temp_mode_passes_args_and_exit_code() {
+fn no_cache_run_passes_args_and_exit_code_and_cleans_up() {
     require_e2e!();
     let bundle = bundle().to_str().unwrap();
-    let out = pyrs(&["-q", "run", bundle, "--", "Alice", "--exit", "7"]);
+    let out = pyrs(&["-q", "run", "--no-cache", bundle, "--", "Alice", "--exit", "7"]);
     let text = stdout(&out);
     assert_eq!(out.status.code(), Some(7), "{text}");
     assert!(text.contains("Hello, Alice!"), "{text}");
@@ -98,6 +109,19 @@ fn temp_mode_passes_args_and_exit_code() {
     // The temp workspace is gone once the run is over.
     let prefix = text.lines().find_map(|l| l.strip_prefix("prefix=")).unwrap();
     assert!(!Path::new(prefix).exists(), "{prefix} was left behind");
+}
+
+#[test]
+fn default_run_reuses_the_cached_environment() {
+    require_e2e!();
+    let bundle = bundle().to_str().unwrap();
+    let first = pyrs(&["run", bundle, "--", "One"]);
+    assert!(first.status.success(), "{}", String::from_utf8_lossy(&first.stderr));
+    let second = pyrs(&["run", bundle, "--", "Two"]);
+    assert!(stdout(&second).contains("Hello, Two!"));
+    assert!(!String::from_utf8_lossy(&second.stderr).contains("setting up"), "rebuilt instead of reusing");
+    let prefix = stdout(&second).lines().find_map(|l| l.strip_prefix("prefix=")).unwrap().to_string();
+    assert!(Path::new(&prefix).starts_with(cache_home()), "{prefix}");
 }
 
 #[test]
@@ -143,7 +167,9 @@ fn tampered_bundle_is_rejected() {
     let bad = tmp.path().join("bad.pyrs");
     std::fs::write(&bad, bytes).unwrap();
 
-    let out = pyrs(&["run", bad.to_str().unwrap()]);
+    // --no-cache: a cache hit would skip reading the wheels. That's safe (the cached environment
+    // was built from wheels that matched the same manifest), but it wouldn't exercise the check.
+    let out = pyrs(&["run", "--no-cache", bad.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("corrupted"), "{err}");
