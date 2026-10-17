@@ -50,9 +50,9 @@ impl Interpreter {
         cmd
     }
 
-    pub fn from_venv(venv: &Path) -> Result<Self> {
+    pub fn from_venv(venv: &Path, use_cache: bool) -> Result<Self> {
         let program = venv_python(venv);
-        match probe(&program, &[], true) {
+        match probe(&program, &[], use_cache) {
             Ok(info) => Ok(Self { program, pre_args: Vec::new(), info }),
             Err(reason) => bail!("{} is not a usable virtual environment: {reason}", venv.display()),
         }

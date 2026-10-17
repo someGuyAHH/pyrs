@@ -21,7 +21,7 @@ pub fn run(args: RunArgs, quiet: bool) -> Result<i32> {
 
     let host = match &mode {
         EnvMode::Venv(dir) => {
-            let py = Interpreter::from_venv(dir)?;
+            let py = Interpreter::from_venv(dir, true)?;
             check_requires_python(requires, &py.info).map_err(|e| anyhow!("{}: {e}", dir.display()))?;
             py
         }

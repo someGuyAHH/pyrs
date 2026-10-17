@@ -3,12 +3,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 
 use crate::bundle;
 use crate::cli::BuildArgs;
 use crate::envs::run_captured;
-use crate::interpreter::{self, Interpreter};
+use crate::interpreter::{self, Interpreter, ProbeInfo};
 use crate::manifest::{BuiltWith, Entry, EntryKind, FORMAT_VERSION, Manifest, WheelEntry};
 use crate::ui::status;
 use crate::hash::sha256_file;
@@ -26,15 +26,8 @@ pub fn run(args: BuildArgs, quiet: bool) -> Result<()> {
         );
     }
 
-    let python = interpreter::discover(args.python.as_deref(), false, |info| {
-        if info.has_pip {
-            Ok(())
-        } else {
-            Err("it has no pip module, which building needs (pick another Python with --python)".into())
-        }
-    })?;
-
     let tmp = tempfile::Builder::new().prefix("pyrs-build-").tempdir().context("creating a build directory")?;
+    let python = build_python(args.python.as_deref(), tmp.path(), quiet)?;
     let own_dir = tmp.path().join("own");
     let wheels_dir = tmp.path().join("wheels");
 
@@ -95,14 +88,53 @@ pub fn run(args: BuildArgs, quiet: bool) -> Result<()> {
     status(
         quiet,
         format!(
-            "{} wheels, {:.1} MiB, {}",
+            "{} wheel{}, {}, {}",
             manifest.wheels.len(),
-            size as f64 / (1024.0 * 1024.0),
+            if manifest.wheels.len() == 1 { "" } else { "s" },
+            human_size(size),
             if pure { "pure Python" } else { "has compiled packages (tied to this platform)" }
         ),
     );
     println!("{}", out.display());
     Ok(())
+}
+
+/// A Python with pip to build with.
+///
+/// Many Pythons have no pip: Debian's system one, uv-managed venvs, … Rather than make the user
+/// fix that, pyrs gives the interpreter a throwaway `python -m venv`, which bootstraps pip with
+/// `ensurepip`. That venv runs the same Python, so the wheels it resolves are the same.
+fn build_python(explicit: Option<&str>, tmp: &Path, quiet: bool) -> Result<Interpreter> {
+    let auto = explicit.is_none() && std::env::var_os("PYRS_PYTHON").is_none_or(|v| v.is_empty());
+    if auto {
+        let with_pip = |info: &ProbeInfo| if info.has_pip { Ok(()) } else { Err(String::new()) };
+        if let Ok(py) = interpreter::discover(None, false, with_pip) {
+            return Ok(py);
+        }
+    }
+    let host = interpreter::discover(explicit, false, |_| Ok(()))?;
+    if host.info.has_pip {
+        return Ok(host);
+    }
+
+    let env = tmp.join("buildenv");
+    let base = &host.info.base_executable;
+    let no_pip_help = "Install pip for that Python (on Debian/Ubuntu: sudo apt install python3-pip \
+                       python3-venv), or pass --python with an interpreter that has pip.";
+    if host.info.has_venv {
+        status(quiet, format!("{} has no pip; creating a build environment", base.display()));
+        let mut cmd = host.command();
+        cmd.args(["-m", "venv"]).arg(&env).current_dir(tmp);
+        run_captured(cmd, "creating a build environment").map_err(|e| anyhow!("{e:#}\n\n{no_pip_help}"))?;
+    } else {
+        bail!("{} has no pip, which building needs. {no_pip_help}", base.display());
+    }
+
+    let python = Interpreter::from_venv(&env, false)?;
+    if !python.info.has_pip {
+        bail!("the build environment ended up without pip. {no_pip_help}");
+    }
+    Ok(python)
 }
 
 fn pip_wheel<'a>(
@@ -151,6 +183,14 @@ fn copy_project(from: &Path, to: &Path, root: bool) -> Result<()> {
         // Symlinked directories are skipped so a link loop can't recurse forever.
     }
     Ok(())
+}
+
+fn human_size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1_048_576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
+    }
 }
 
 fn wheel_paths(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -285,5 +325,8 @@ mod tests {
         assert_eq!(normalize("My_App.Core"), "my-app-core");
         assert_eq!(normalize("a--b"), "a-b");
         assert_eq!(safe_name("my app/1"), "my_app_1");
+        assert_eq!(human_size(900), "900 B");
+        assert_eq!(human_size(4290), "4.2 KiB");
+        assert_eq!(human_size(1_821_191), "1.7 MiB");
     }
 }

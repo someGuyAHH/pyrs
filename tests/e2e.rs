@@ -21,10 +21,21 @@ fn builder_python() -> Option<String> {
     std::env::var("PYRS_E2E_PYTHON").ok().filter(|p| !p.is_empty())
 }
 
+struct Built {
+    _tmp: tempfile::TempDir,
+    bundle: PathBuf,
+    /// find-links directory holding the greeter_dep wheel.
+    links: PathBuf,
+}
+
 /// Builds the hello_app bundle once per test run and returns its path.
 fn bundle() -> &'static Path {
-    static BUNDLE: OnceLock<(tempfile::TempDir, PathBuf)> = OnceLock::new();
-    let (_, path) = BUNDLE.get_or_init(|| {
+    &built().bundle
+}
+
+fn built() -> &'static Built {
+    static BUILT: OnceLock<Built> = OnceLock::new();
+    BUILT.get_or_init(|| {
         let python = builder_python().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let links = tmp.path().join("links");
@@ -49,9 +60,8 @@ fn bundle() -> &'static Path {
             .output()
             .unwrap();
         assert!(output.status.success(), "pyrs build failed: {}", String::from_utf8_lossy(&output.stderr));
-        (tmp, out)
-    });
-    path
+        Built { _tmp: tmp, bundle: out, links }
+    })
 }
 
 fn copy_dir(from: &Path, to: &Path) {
@@ -173,6 +183,42 @@ fn tampered_bundle_is_rejected() {
     assert_eq!(out.status.code(), Some(2));
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("corrupted"), "{err}");
+}
+
+#[test]
+fn builds_with_a_python_that_has_no_pip() {
+    require_e2e!();
+    let imports = |module: &str| {
+        Command::new("python3").args(["-I", "-c", &format!("import {module}")]).output().is_ok_and(|o| o.status.success())
+    };
+    if imports("pip") {
+        eprintln!("skipped: needs a python3 without pip");
+        return;
+    }
+    let has_ensurepip = imports("ensurepip");
+    let tmp = tempfile::tempdir().unwrap();
+    let out = tmp.path().join("nopip.pyrs");
+    let output = Command::new(PYRS)
+        .arg("build")
+        .arg(fixtures().join("hello_app"))
+        .args(["--python", "python3", "-o"])
+        .arg(&out)
+        .env("PIP_FIND_LINKS", &built().links)
+        .env("XDG_CACHE_HOME", cache_home())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&output.stderr);
+    if !has_ensurepip {
+        // e.g. Debian without python3-venv: there's no way to get pip, so say how to fix it.
+        assert_eq!(output.status.code(), Some(2), "{err}");
+        assert!(err.contains("sudo apt install python3-pip python3-venv"), "{err}");
+        return;
+    }
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("creating a build environment"), "{err}");
+
+    let run = pyrs(&["-q", "run", "--no-cache", out.to_str().unwrap(), "--", "NoPip"]);
+    assert!(stdout(&run).contains("Hello, NoPip!"));
 }
 
 #[test]
