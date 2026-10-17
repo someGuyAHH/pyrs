@@ -1,0 +1,16 @@
+[project]
+name = "hello-app"
+version = "1.0.0"
+description = "Fixture application for the pyrs end-to-end tests"
+requires-python = ">=3.10"
+dependencies = ["greeter-dep>=0.2"]
+
+[project.scripts]
+hello-app = "hello_app.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
