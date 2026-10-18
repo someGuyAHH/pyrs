@@ -17,7 +17,7 @@ It doesn't bundle a Python runtime the way PyInstaller does. The file holds your
 
 ## Usage
 
-Build (on your machine). pyrs needs a Python with pip to build with. If yours has none, as with uv's venvs, it makes a throwaway one with `python -m venv`. On Debian/Ubuntu that needs `python3-venv`, or install `python3-pip` directly:
+Build (on your machine). pyrs needs a Python with pip to build with, and looks in this order: `--python`/`PYRS_PYTHON`; the activated venv; the project's `.venv/` or `venv/`; `python3`/`python` on PATH. If none of those has pip, it makes a throwaway build venv with `python -m venv`. On Debian/Ubuntu that needs `python3-venv`. A uv-made venv only has pip if it was created with `uv venv --seed`.
 
 ```sh
 pyrs build path/to/project            # writes ./<name>-<version>.pyrs

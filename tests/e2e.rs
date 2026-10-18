@@ -222,6 +222,35 @@ fn builds_with_a_python_that_has_no_pip() {
 }
 
 #[test]
+#[cfg(unix)]
+fn build_finds_the_projects_own_venv() {
+    require_e2e!();
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("hello_app");
+    copy_dir(&fixtures().join("hello_app"), &project);
+    // The builder Python lives in a venv with pip; make it the project's .venv.
+    let builder_venv = Path::new(&builder_python().unwrap()).parent().unwrap().parent().unwrap().to_path_buf();
+    std::os::unix::fs::symlink(&builder_venv, project.join(".venv")).unwrap();
+
+    let out = tmp.path().join("venv.pyrs");
+    let output = Command::new(PYRS)
+        .arg("build")
+        .arg(&project)
+        .arg("-o")
+        .arg(&out)
+        .env_remove("PYRS_PYTHON")
+        .env_remove("VIRTUAL_ENV")
+        .env("PIP_FIND_LINKS", &built().links)
+        .env("XDG_CACHE_HOME", cache_home())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{err}");
+    assert!(err.contains("building with the venv at") && err.contains(".venv"), "{err}");
+    assert!(out.is_file());
+}
+
+#[test]
 fn inspect_shows_the_entry_point() {
     require_e2e!();
     let out = pyrs(&["inspect", bundle().to_str().unwrap()]);

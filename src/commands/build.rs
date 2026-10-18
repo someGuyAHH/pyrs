@@ -27,7 +27,7 @@ pub fn run(args: BuildArgs, quiet: bool) -> Result<()> {
     }
 
     let tmp = tempfile::Builder::new().prefix("pyrs-build-").tempdir().context("creating a build directory")?;
-    let python = build_python(args.python.as_deref(), tmp.path(), quiet)?;
+    let python = build_python(args.python.as_deref(), &dir, tmp.path(), quiet)?;
     let own_dir = tmp.path().join("own");
     let wheels_dir = tmp.path().join("wheels");
 
@@ -99,14 +99,30 @@ pub fn run(args: BuildArgs, quiet: bool) -> Result<()> {
     Ok(())
 }
 
-/// A Python with pip to build with.
+/// A Python with pip to build with, looked for in this order:
 ///
-/// Many Pythons have no pip: Debian's system one, uv-managed venvs, … Rather than make the user
-/// fix that, pyrs gives the interpreter a throwaway `python -m venv`, which bootstraps pip with
-/// `ensurepip`. That venv runs the same Python, so the wheels it resolves are the same.
-fn build_python(explicit: Option<&str>, tmp: &Path, quiet: bool) -> Result<Interpreter> {
+/// 1. `--python` / `PYRS_PYTHON`, used as given;
+/// 2. a venv: the activated one (`$VIRTUAL_ENV`), then the project's `.venv/` or `venv/`;
+/// 3. `python3` / `python` on PATH;
+/// 4. a throwaway `python -m venv` made from the PATH Python, which gets pip from `ensurepip`.
+///    It runs the same Python, so the wheels it resolves are the same.
+fn build_python(explicit: Option<&str>, project: &Path, tmp: &Path, quiet: bool) -> Result<Interpreter> {
     let auto = explicit.is_none() && std::env::var_os("PYRS_PYTHON").is_none_or(|v| v.is_empty());
+    // Venvs that were found but had no pip, to mention if nothing else works either.
+    let mut pipless = Vec::new();
     if auto {
+        let active = std::env::var_os("VIRTUAL_ENV").map(PathBuf::from);
+        for venv in venv_candidates(active, project) {
+            match Interpreter::from_venv(&venv, false) {
+                Ok(py) if py.info.has_pip => {
+                    status(quiet, format!("building with the venv at {}", venv.display()));
+                    return Ok(py);
+                }
+                Ok(_) => pipless.push(venv),
+                // Not a working venv (e.g. a stray directory named `venv`): ignore it.
+                Err(_) => {}
+            }
+        }
         let with_pip = |info: &ProbeInfo| if info.has_pip { Ok(()) } else { Err(String::new()) };
         if let Ok(py) = interpreter::discover(None, false, with_pip) {
             return Ok(py);
@@ -117,24 +133,44 @@ fn build_python(explicit: Option<&str>, tmp: &Path, quiet: bool) -> Result<Inter
         return Ok(host);
     }
 
+    let mut no_pip_help = String::new();
+    for venv in &pipless {
+        no_pip_help.push_str(&format!("Found the venv {}, but it has no pip in it.\n", venv.display()));
+    }
+    no_pip_help.push_str(
+        "Install pip for that Python (on Debian/Ubuntu: sudo apt install python3-pip python3-venv), \
+         put pip in the project's venv, or pass --python with an interpreter that has pip.",
+    );
+
     let env = tmp.join("buildenv");
     let base = &host.info.base_executable;
-    let no_pip_help = "Install pip for that Python (on Debian/Ubuntu: sudo apt install python3-pip \
-                       python3-venv), or pass --python with an interpreter that has pip.";
     if host.info.has_venv {
         status(quiet, format!("{} has no pip; creating a build environment", base.display()));
         let mut cmd = host.command();
         cmd.args(["-m", "venv"]).arg(&env).current_dir(tmp);
         run_captured(cmd, "creating a build environment").map_err(|e| anyhow!("{e:#}\n\n{no_pip_help}"))?;
     } else {
-        bail!("{} has no pip, which building needs. {no_pip_help}", base.display());
+        bail!("{} has no pip, which building needs.\n{no_pip_help}", base.display());
     }
 
     let python = Interpreter::from_venv(&env, false)?;
     if !python.info.has_pip {
-        bail!("the build environment ended up without pip. {no_pip_help}");
+        bail!("the build environment ended up without pip.\n{no_pip_help}");
     }
     Ok(python)
+}
+
+/// Venvs worth checking for pip, most specific first, existing ones only, without duplicates.
+fn venv_candidates(active: Option<PathBuf>, project: &Path) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    let candidates = active.filter(|p| !p.as_os_str().is_empty()).into_iter();
+    for venv in candidates.chain([project.join(".venv"), project.join("venv")]) {
+        let real = venv.canonicalize().unwrap_or_else(|_| venv.clone());
+        if venv.join("pyvenv.cfg").is_file() && !found.iter().any(|f| f.canonicalize().ok().as_ref() == Some(&real)) {
+            found.push(venv);
+        }
+    }
+    found
 }
 
 fn pip_wheel<'a>(
@@ -318,6 +354,25 @@ mod tests {
     fn unknown_entry_lists_choices() {
         let err = choose_entry(&info(&[("app", "a:b")], &["pkg"]), Some("nope")).unwrap_err().to_string();
         assert!(err.contains("app, pkg"), "{err}");
+    }
+
+    #[test]
+    fn venv_candidates_prefer_the_active_venv_and_skip_non_venvs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let active = tmp.path().join("active");
+        for venv in [&active, &project.join(".venv")] {
+            fs::create_dir_all(venv).unwrap();
+            fs::write(venv.join("pyvenv.cfg"), "").unwrap();
+        }
+        // A directory called venv that isn't one.
+        fs::create_dir_all(project.join("venv")).unwrap();
+
+        let found = venv_candidates(Some(active.clone()), &project);
+        assert_eq!(found, vec![active, project.join(".venv")]);
+        // Activating the project's own venv doesn't list it twice.
+        assert_eq!(venv_candidates(Some(project.join(".venv")), &project), vec![project.join(".venv")]);
+        assert_eq!(venv_candidates(None, &project), vec![project.join(".venv")]);
     }
 
     #[test]
